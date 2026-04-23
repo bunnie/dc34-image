@@ -280,7 +280,7 @@ def main() -> None:
         help="Serial port, e.g. /dev/ttyUSB0 or COM3"
     )
     parser.add_argument(
-        "--image", required=True,
+        "--image",
         help="Path to the 128x128 black-and-white PNG"
     )
     parser.add_argument(
@@ -302,6 +302,9 @@ def main() -> None:
         print("--clear specified, ignoring all other arguments and performing clear")
         clear(args.port, args.delay)
     else:
+        if args.image is None:
+            print("Specify an image to send with --image")
+            return
         send_image(args.port, args.image, args.force, args.delay)
 
 
