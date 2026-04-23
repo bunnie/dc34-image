@@ -40,6 +40,12 @@ After running `pipx ensurepath`, restart your terminal.
 pipx install git+https://github.com/bunnie/dc34-image.git
 ```
 
+or if cloned locally:
+
+```bash
+pipx install /path/to/your/local/repo
+```
+
 ---
 
 ## Usage
