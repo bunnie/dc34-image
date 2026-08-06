@@ -29,6 +29,8 @@ try:
 except ImportError:
     sys.exit("pyserial is required: pip install pyserial")
 
+from dc34_image.detect import DetectError, all_ports_table, resolve_port
+
 # -- Image / packing constants ------------------------------------------------
 
 EXPECTED_SIZE   = (128, 128)
@@ -276,8 +278,17 @@ def main() -> None:
         description="Send a 128x128 B&W PNG to a badge via serial"
     )
     parser.add_argument(
-        "--port",  required=True,
-        help="Serial port, e.g. /dev/ttyUSB0 or COM3"
+        "--port",
+        help="Serial port, e.g. /dev/ttyACM0 or COM3. "
+             "Omit to auto-detect the badge (or set DC34_IMAGE_PORT)"
+    )
+    parser.add_argument(
+        "--list-ports", action="store_true",
+        help="List all serial devices seen and exit"
+    )
+    parser.add_argument(
+        "--wait", type=float, default=0.0, metavar="SECONDS",
+        help="Wait up to SECONDS for a badge to be plugged in before giving up"
     )
     parser.add_argument(
         "--image",
@@ -298,14 +309,25 @@ def main() -> None:
         help="Remove the image. Overrides any other commands when specified"
     )
     args = parser.parse_args()
+
+    if args.list_ports:
+        print("Serial devices:")
+        print(all_ports_table())
+        return
+
+    try:
+        port = resolve_port(args.port, wait=args.wait)
+    except DetectError as e:
+        sys.exit(f"[ERROR] {e}")
+
     if args.clear:
         print("--clear specified, ignoring all other arguments and performing clear")
-        clear(args.port, args.delay)
+        clear(port, args.delay)
     else:
         if args.image is None:
             print("Specify an image to send with --image")
             return
-        send_image(args.port, args.image, args.force, args.delay)
+        send_image(port, args.image, args.force, args.delay)
 
 
 if __name__ == "__main__":
