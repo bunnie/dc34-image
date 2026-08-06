@@ -21,7 +21,7 @@ pipx ensurepath
 **Windows**
 ```powershell
 pip install pipx
-pipx ensurepath
+python -m pipx ensurepath
 ```
 
 **Linux**
