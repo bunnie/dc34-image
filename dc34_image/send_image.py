@@ -15,6 +15,7 @@ import argparse
 import struct
 import sys
 import time
+import typing
 import zlib
 import base64
 from pathlib import Path
@@ -43,7 +44,7 @@ CHUNK_WIRE_SIZE = CHUNK_HDR_SIZE + CHUNK_DATA_SIZE + CHUNK_CRC_SIZE  # 70
 # -- Serial constants ---------------------------------------------------------
 
 BAUD_RATE      = 1_000_000
-SERIAL_TIMEOUT = 4.0   # seconds waiting for a response line
+SERIAL_TIMEOUT = 1.0   # seconds waiting for a response line
 RETRY_DELAY    = 0.5   # seconds between retries on ERR
 MAX_RETRIES    = 4
 
@@ -134,6 +135,32 @@ def make_chunk(index: int, data: bytes) -> bytes:
     crc     = zlib.crc32(payload) & 0xFFFF_FFFF
     return payload + struct.pack(">I", crc)
 
+# -- Serial helpers ------------------------------------------------------------
+def read_uart_line(ser: serial.Serial) -> str:
+    """
+    Helper to read a single UART line
+    """
+    return ser.readline().decode("ascii", errors="replace").strip()
+
+def read_uart_line_until(ser: serial.Serial, tokens: typing.Tuple[str, ...], timeout: int) -> typing.Optional[str]:
+    """
+    The Xous kernel uses this UART channel as logging as well as for comamnds, so we need to be very selective on the
+    messages that we allow through this filter. Ignore all lines unless they are a given token, keep looking for that
+    token for timeout seconds
+    """
+    ts = time.time()
+    while time.time() < ts + timeout:
+        line = read_uart_line(ser=ser)
+        for token in tokens:
+            if token == line:
+                return line
+    return None
+
+def flush_serial(ser: serial.Serial, num_flushes: int = 3):
+    ser.readall()
+    for _ in range(0, num_flushes):
+        ser.write("\r\n".encode())
+        ser.readline()
 
 # -- Serial transfer -----------------------------------------------------------
 
@@ -171,6 +198,8 @@ def send_image(port: str, image_path: str, force: bool, line_delay: float) -> No
     except serial.SerialException as e:
         sys.exit(f"[ERROR] Cannot open serial port {port}: {e}")
 
+    flush_serial(ser=ser)
+
     print(f"[INFO] Sending {NUM_CHUNKS} chunks via {port} @ {BAUD_RATE} baud")
 
     try:
@@ -183,13 +212,7 @@ def send_image(port: str, image_path: str, force: bool, line_delay: float) -> No
             for attempt in range(MAX_RETRIES + 1):
                 ser.write(line_b)
 
-                raw = ser.readline()
-                response = raw.decode("ascii", errors="replace").strip()
-
-                if response.startswith("[console]"): # local echo
-                    print(f"skipping {response}")
-                    raw = ser.readline()
-                    response = raw.decode("ascii", errors="replace").strip()
+                response = read_uart_line_until(ser=ser, tokens=("SUCCESS", "ERR", "OK"), timeout=3)
 
                 if response == "SUCCESS":
                     print(f"[OK]  Chunk {idx+1:>2}/{NUM_CHUNKS} -> SUCCESS — transfer complete")
@@ -199,20 +222,21 @@ def send_image(port: str, image_path: str, force: bool, line_delay: float) -> No
                     print(f"[OK]  Chunk {idx+1:>2}/{NUM_CHUNKS}")
                     break
 
-                if response == "ERR":
+                if response == "ERR" or response == "":
                     if attempt < MAX_RETRIES:
-                        print(f"[WARN] Chunk {idx+1:>2}/{NUM_CHUNKS} ERR — retry {attempt+1}/{MAX_RETRIES}")
+                        print(f"[WARN] Chunk {idx+1:>2}/{NUM_CHUNKS} {'TIMEOUT' if response == '' else response } — "
+                              f"retry {attempt+1}/{MAX_RETRIES}")
                         time.sleep(RETRY_DELAY)
                     else:
                         sys.exit(f"[ERROR] Chunk {idx+1}/{NUM_CHUNKS} failed after {MAX_RETRIES} retries")
-                else:
-                    # Unexpected / timeout (readline returns b'' on timeout)
+
+                elif response is None:
                     if attempt < MAX_RETRIES:
-                        print(f"[WARN] Chunk {idx+1:>2}/{NUM_CHUNKS} unexpected response "
-                              f"'{response}' — retry {attempt+1}/{MAX_RETRIES}")
+                        print(f"[WARN] Chunk {idx + 1:>2}/{NUM_CHUNKS} never got a correct response — retry "
+                              f"{attempt + 1}/{MAX_RETRIES}")
                         time.sleep(RETRY_DELAY)
                     else:
-                        sys.exit(f"[ERROR] Chunk {idx+1}/{NUM_CHUNKS} — no valid response after retries")
+                        sys.exit(f"[ERROR] Chunk {idx + 1}/{NUM_CHUNKS} — no valid response after retries")
 
             if line_delay > 0:
                 time.sleep(line_delay)
