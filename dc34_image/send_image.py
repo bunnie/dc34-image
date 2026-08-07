@@ -12,7 +12,6 @@ Serial protocol:
 """
 
 import argparse
-import re
 import struct
 import sys
 import time
@@ -52,26 +51,23 @@ DEFAULT_LINE_DELAY = 0.2  # seconds between chunks
 
 # -- Serial helpers -------------------------------------------------------------
 
-# The device logs to the same CDC pipe it answers on, so replies can arrive
-# interleaved with -- or glued to -- log output.  Anything matching this is
-# chatter, not a protocol reply.
-LOG_NOISE = re.compile(
-    r"(?:INFO|WARN|DEBG|TRCE|ERR\s):[^\r\n]*"   # log lines; note "ERR :" has a space
-    r"|\[console\][^\r\n]*"                      # command echo
-    r"|\([^()\s]+\.rs:\d+\)"                     # trailing source locations
-)
-
-
 def read_response(ser, expected: tuple[str, ...],
                   deadline: float = SERIAL_TIMEOUT) -> str | None:
-    """Drain the port until one of `expected` appears as a bare token.
+    """Drain the port until a whole line is exactly one of `expected`.
 
-    Reading a single line is not enough.  The device interleaves log output with
-    its replies, so an "OK" may be preceded by unrelated lines or arrive glued
-    to a log fragment in the middle of one.  Strip the chatter, then look for
-    the token.  Returns the token found, or None if `deadline` expires.
+    Reading a single line is not enough: the device logs to the same CDC pipe it
+    answers on, so a reply is often preceded by unrelated log lines.  Keep
+    reading and accept only a line that matches a protocol token exactly.
+
+    Matching whole lines rather than searching for the token is what makes this
+    robust.  A log line is never *equal* to "OK", so any log format -- including
+    ones this script has never seen -- is ignored for free.  It also avoids a
+    real collision: the badge's error prefix is "ERR :" with a space, so a
+    substring search for "ERR" matches display-timeout logs and would read them
+    as the device rejecting a chunk.
+
+    Returns the token found, or None if `deadline` expires.
     """
-    token = re.compile(r"(?<![A-Z])(" + "|".join(expected) + r")(?![A-Z])")
     buf = ""
     end = time.monotonic() + deadline
     while True:
@@ -83,9 +79,9 @@ def read_response(ser, expected: tuple[str, ...],
         if not raw:
             continue
         buf += raw.decode("ascii", errors="replace")
-        match = token.search(LOG_NOISE.sub(" ", buf))
-        if match:
-            return match.group(1)
+        for line in buf.splitlines():
+            if line.strip() in expected:
+                return line.strip()
 
 # -- Image helpers -------------------------------------------------------------
 
