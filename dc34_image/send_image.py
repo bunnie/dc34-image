@@ -280,7 +280,11 @@ def main() -> None:
     parser.add_argument(
         "--port",
         help="Serial port, e.g. /dev/ttyACM0 or COM3. "
-             "Omit to auto-detect the badge (or set DC34_IMAGE_PORT)"
+             "Required unless --autodetect is given (or DC34_IMAGE_PORT is set)"
+    )
+    parser.add_argument(
+        "--autodetect", action="store_true",
+        help="Auto-detect the badge instead of requiring --port"
     )
     parser.add_argument(
         "--list-ports", action="store_true",
@@ -316,7 +320,7 @@ def main() -> None:
         return
 
     try:
-        port = resolve_port(args.port, wait=args.wait)
+        port = resolve_port(args.port, wait=args.wait, autodetect=args.autodetect)
     except DetectError as e:
         sys.exit(f"[ERROR] {e}")
 

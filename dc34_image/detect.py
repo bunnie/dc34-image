@@ -220,7 +220,8 @@ def all_ports_table() -> str:
 
 def resolve_port(explicit: Optional[str] = None,
                  wait: float = 0.0,
-                 interactive: Optional[bool] = None) -> str:
+                 interactive: Optional[bool] = None,
+                 autodetect: bool = False) -> str:
     """Return the port to use, or raise DetectError with an actionable message."""
     if explicit:
         return explicit
@@ -229,6 +230,16 @@ def resolve_port(explicit: Optional[str] = None,
     if env:
         print(f"[INFO] Using {ENV_PORT_VAR}={env}")
         return env
+
+    if not autodetect:
+        raise DetectError(
+            "No serial port specified.\n"
+            "  - Pass --port explicitly, e.g. --port /dev/ttyACM0\n"
+            "  - Or pass --autodetect to search for the badge automatically\n"
+            f"  - Or set {ENV_PORT_VAR} in your environment\n\n"
+            "Serial devices seen:\n"
+            f"{all_ports_table()}"
+        )
 
     if interactive is None:
         interactive = sys.stdin.isatty() and sys.stdout.isatty()
