@@ -49,6 +49,40 @@ MAX_RETRIES    = 4
 
 DEFAULT_LINE_DELAY = 0.2  # seconds between chunks
 
+# -- Serial helpers -------------------------------------------------------------
+
+def read_response(ser, expected: tuple[str, ...],
+                  deadline: float = SERIAL_TIMEOUT) -> str | None:
+    """Drain the port until a whole line is exactly one of `expected`.
+
+    Reading a single line is not enough: the device logs to the same CDC pipe it
+    answers on, so a reply is often preceded by unrelated log lines.  Keep
+    reading and accept only a line that matches a protocol token exactly.
+
+    Matching whole lines rather than searching for the token is what makes this
+    robust.  A log line is never *equal* to "OK", so any log format -- including
+    ones this script has never seen -- is ignored for free.  It also avoids a
+    real collision: the badge's error prefix is "ERR :" with a space, so a
+    substring search for "ERR" matches display-timeout logs and would read them
+    as the device rejecting a chunk.
+
+    Returns the token found, or None if `deadline` expires.
+    """
+    buf = ""
+    end = time.monotonic() + deadline
+    while True:
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            return None
+        ser.timeout = remaining
+        raw = ser.readline()
+        if not raw:
+            continue
+        buf += raw.decode("ascii", errors="replace")
+        for line in buf.splitlines():
+            if line.strip() in expected:
+                return line.strip()
+
 # -- Image helpers -------------------------------------------------------------
 
 def validate_image(img: Image.Image) -> tuple[bool, str]:
@@ -181,15 +215,10 @@ def send_image(port: str, image_path: str, force: bool, line_delay: float) -> No
             line_b  = line.encode("ascii")
 
             for attempt in range(MAX_RETRIES + 1):
+                ser.reset_input_buffer()
                 ser.write(line_b)
 
-                raw = ser.readline()
-                response = raw.decode("ascii", errors="replace").strip()
-
-                if response.startswith("[console]"): # local echo
-                    print(f"skipping {response}")
-                    raw = ser.readline()
-                    response = raw.decode("ascii", errors="replace").strip()
+                response = read_response(ser, ("SUCCESS", "OK", "ERR"))
 
                 if response == "SUCCESS":
                     print(f"[OK]  Chunk {idx+1:>2}/{NUM_CHUNKS} -> SUCCESS — transfer complete")
@@ -206,13 +235,14 @@ def send_image(port: str, image_path: str, force: bool, line_delay: float) -> No
                     else:
                         sys.exit(f"[ERROR] Chunk {idx+1}/{NUM_CHUNKS} failed after {MAX_RETRIES} retries")
                 else:
-                    # Unexpected / timeout (readline returns b'' on timeout)
+                    # None means the deadline expired with no bare token in sight
+                    reason = "no response" if response is None else f"unexpected response '{response}'"
                     if attempt < MAX_RETRIES:
-                        print(f"[WARN] Chunk {idx+1:>2}/{NUM_CHUNKS} unexpected response "
-                              f"'{response}' — retry {attempt+1}/{MAX_RETRIES}")
+                        print(f"[WARN] Chunk {idx+1:>2}/{NUM_CHUNKS} {reason}"
+                              f" — retry {attempt+1}/{MAX_RETRIES}")
                         time.sleep(RETRY_DELAY)
                     else:
-                        sys.exit(f"[ERROR] Chunk {idx+1}/{NUM_CHUNKS} — no valid response after retries")
+                        sys.exit(f"[ERROR] Chunk {idx+1}/{NUM_CHUNKS} — {reason} after retries")
 
             if line_delay > 0:
                 time.sleep(line_delay)
@@ -243,15 +273,10 @@ def clear(port: str, line_delay: float):
     line_b  = line.encode("ascii")
     try:
         for attempt in range(MAX_RETRIES + 1):
+            ser.reset_input_buffer()
             ser.write(line_b)
 
-            raw = ser.readline()
-            response = raw.decode("ascii", errors="replace").strip()
-
-            if response.startswith("[console]"): # local echo
-                print(f"skipping {response}")
-                raw = ser.readline()
-                response = raw.decode("ascii", errors="replace").strip()
+            response = read_response(ser, ("CLEAR",))
 
             if response == "CLEAR":
                 print(f"[OK]  image cleared")
